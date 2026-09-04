@@ -1,0 +1,32 @@
+[project]
+name = "ha-rainforest-emu2"
+version = "0.1.0"
+description = "Home Assistant integration for Rainforest EMU-2 and RAVEn devices"
+requires-python = ">=3.13"
+dependencies = ["aioraven==0.7.1"]
+
+[project.optional-dependencies]
+test = [
+  "pytest>=8.0",
+  "pytest-homeassistant-custom-component",
+]
+dev = [
+  "mypy>=1.13",
+  "pytest>=8.0",
+  "pytest-homeassistant-custom-component",
+  "ruff>=0.9",
+]
+
+[tool.ruff]
+target-version = "py313"
+line-length = 88
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC", "RUF"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
