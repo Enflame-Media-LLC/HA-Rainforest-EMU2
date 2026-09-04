@@ -1,6 +1,6 @@
 # Rainforest EMU-2 and RAVEn Enhanced Integration Design
 
-**Status:** Revised after usability and setup review; awaiting re-approval  
+**Status:** Approved after usability and setup review  
 **Date:** 2026-09-04  
 **Repository:** https://github.com/Enflame-Media-LLC/HA-Rainforest-EMU2  
 **Integration domain:** `rainforest_emu2`  
