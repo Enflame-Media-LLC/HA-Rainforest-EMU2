@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
-from homeassistant.config_entries import SOURCE_USB
-from homeassistant.const import CONF_DEVICE
+from homeassistant.config_entries import (
+    SOURCE_USB,
+    ConfigEntryDisabler,
+    ConfigEntryState,
+)
+from homeassistant.const import CONF_DEVICE, CONF_MAC
 from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.service_info.usb import UsbServiceInfo
@@ -32,6 +37,35 @@ VALIDATION = ValidationResult(
     firmware="1.2.3",
     meters=(MeterRecord(bytes.fromhex(METER_MAC), METER_MAC, "Main", "electric"),),
 )
+
+
+class ReconfigureClient:
+    """Small runtime client double that exposes the flow's transport boundary."""
+
+    def __init__(self, result: ValidationResult) -> None:
+        self.result = result
+        self.paths: list[str] = []
+        self.connected_path: str | None = None
+
+    async def async_reconfigure_path(self, path: str) -> ValidationResult:
+        """Record the candidate path and return a controlled validation result."""
+
+        self.paths.append(path)
+        self.connected_path = path
+        return self.result
+
+    async def async_restore_path(self, path: str) -> None:
+        """Record recovery of the prior persistent transport."""
+
+        self.paths.append(path)
+        self.connected_path = path
+
+
+class Runtime:
+    """Task 7-compatible runtime shape for reconfiguration tests."""
+
+    def __init__(self, client: ReconfigureClient) -> None:
+        self.client = client
 
 
 async def _start_user_flow(hass, monkeypatch, validate: AsyncMock):
@@ -100,6 +134,20 @@ async def _start_advanced_flow(hass, path: str) -> dict[str, object]:
     assert result["step_id"] == "advanced"
     return await hass.config_entries.flow.async_configure(
         result["flow_id"], {"path": path}
+    )
+
+
+async def _start_builtin_import(hass, entry) -> dict[str, object]:
+    """Advance a user flow through built-in entry selection without validation."""
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": "user"}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {"action": "import_builtin"}
+    )
+    assert result["step_id"] == "import_builtin"
+    return await hass.config_entries.flow.async_configure(
+        result["flow_id"], {"entry_id": entry.entry_id}
     )
 
 
@@ -756,3 +804,656 @@ def test_structured_validation_error_maps_to_safe_translation_key(
 
     assert _error_key(error) == expected
     assert "private" not in _error_key(error)
+
+
+async def test_import_preselects_only_present_meters_without_mutating_builtin_entry(
+    hass, monkeypatch
+) -> None:
+    """Migration copies only transient defaults from a disabled built-in entry."""
+    from custom_components.rainforest_emu2 import config_flow
+
+    old_data = {
+        CONF_DEVICE: "/dev/ttyACM0",
+        CONF_MAC: [METER_MAC, "0013500102030499"],
+    }
+    old_entry = MockConfigEntry(
+        domain="rainforest_raven",
+        data=old_data,
+        disabled_by=ConfigEntryDisabler.USER,
+    )
+    old_entry.add_to_hass(hass)
+    validate = AsyncMock(return_value=VALIDATION)
+    monkeypatch.setattr(
+        config_flow,
+        "RavenClient",
+        lambda path: type("Client", (), {"async_validate": validate})(),
+    )
+
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": "user"}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {"action": "import_builtin"}
+    )
+    assert result["step_id"] == "import_builtin"
+
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {"entry_id": old_entry.entry_id}
+    )
+
+    assert result["step_id"] == "import_confirm"
+    assert old_entry.disabled_by is ConfigEntryDisabler.USER
+    assert dict(old_entry.data) == old_data
+    validate.assert_not_awaited()
+
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+    assert result["step_id"] == "meters"
+    meter_key = next(iter(result["data_schema"].schema))
+    assert meter_key.default() == [METER_MAC]
+    assert old_entry.entry_id in hass.config_entries.async_entry_ids()
+    assert not hass.config_entries.async_entries(DOMAIN)
+
+
+async def test_import_enabled_builtin_aborts_without_opening_serial(
+    hass, monkeypatch
+) -> None:
+    """An enabled built-in entry retains ownership and cannot be imported."""
+    from custom_components.rainforest_emu2 import config_flow
+
+    old_entry = MockConfigEntry(
+        domain="rainforest_raven",
+        data={CONF_DEVICE: "/dev/ttyACM0", CONF_MAC: [METER_MAC]},
+    )
+    old_entry.add_to_hass(hass)
+    validate = AsyncMock()
+    monkeypatch.setattr(
+        config_flow,
+        "RavenClient",
+        lambda path: type("Client", (), {"async_validate": validate})(),
+    )
+
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": "user"}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {"action": "import_builtin"}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {"entry_id": old_entry.entry_id}
+    )
+
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "builtin_still_enabled"
+    validate.assert_not_awaited()
+    assert dict(old_entry.data) == {CONF_DEVICE: "/dev/ttyACM0", CONF_MAC: [METER_MAC]}
+
+
+async def test_import_keeps_missing_builtin_path_editable(hass, monkeypatch) -> None:
+    """An unavailable old path is editable before the new flow opens anything."""
+    from custom_components.rainforest_emu2 import config_flow
+
+    old_entry = MockConfigEntry(
+        domain="rainforest_raven",
+        data={CONF_DEVICE: "/dev/missing-rainforest", CONF_MAC: [METER_MAC]},
+        disabled_by=ConfigEntryDisabler.USER,
+    )
+    old_entry.add_to_hass(hass)
+    validate = AsyncMock(return_value=VALIDATION)
+    monkeypatch.setattr(
+        config_flow,
+        "RavenClient",
+        lambda path: type("Client", (), {"async_validate": validate})(),
+    )
+
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": "user"}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {"action": "import_builtin"}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {"entry_id": old_entry.entry_id}
+    )
+
+    assert result["step_id"] == "import_confirm"
+    path_key = next(iter(result["data_schema"].schema))
+    assert path_key.default() == "/dev/missing-rainforest"
+    validate.assert_not_awaited()
+
+
+async def test_import_empty_meter_result_returns_to_its_confirmation_step(
+    hass, monkeypatch
+) -> None:
+    """An imported flow keeps its editable path step after an empty meter response."""
+    from custom_components.rainforest_emu2 import config_flow
+
+    old_entry = MockConfigEntry(
+        domain="rainforest_raven",
+        data={CONF_DEVICE: "/dev/ttyACM0", CONF_MAC: [METER_MAC]},
+        disabled_by=ConfigEntryDisabler.USER,
+    )
+    old_entry.add_to_hass(hass)
+    empty_result = ValidationResult(
+        path="/dev/ttyACM0",
+        device_mac=VALIDATION.device_mac,
+        manufacturer="Rainforest",
+        model="EMU-2",
+        firmware="1.2.3",
+        meters=(),
+    )
+    monkeypatch.setattr(
+        config_flow,
+        "RavenClient",
+        lambda path: type(
+            "Client", (), {"async_validate": AsyncMock(return_value=empty_result)}
+        )(),
+    )
+
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": "user"}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {"action": "import_builtin"}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {"entry_id": old_entry.entry_id}
+    )
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+
+    assert result["step_id"] == "import_confirm"
+    assert result["errors"] == {"base": "no_paired_meters"}
+
+
+async def test_reconfigure_loaded_entry_uses_existing_client_and_updates_same_entry(
+    hass,
+) -> None:
+    """Repair validates with the loaded client and reloads the same entry."""
+    client = ReconfigureClient(VALIDATION)
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        unique_id=VALIDATION.device_mac,
+        state=ConfigEntryState.LOADED,
+        data={
+            CONF_DEVICE: "/dev/ttyACM9",
+            CONF_METERS: [METER_MAC],
+            "usb_serial": "old-usb",
+            "usb_vid": 0x04B4,
+            "usb_pid": 0x0003,
+        },
+    )
+    entry.runtime_data = Runtime(client)
+    entry.add_to_hass(hass)
+
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN,
+        context={"source": "reconfigure", "entry_id": entry.entry_id},
+    )
+    assert result["step_id"] == "reconfigure"
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {CONF_DEVICE: "/dev/ttyACM0"}
+    )
+    assert result["step_id"] == "reconfigure_confirm"
+
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+    assert result["step_id"] == "meters"
+    assert client.paths == ["/dev/ttyACM0"]
+
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {CONF_METERS: [METER_MAC]}
+    )
+
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "reconfigure_successful"
+    assert entry.entry_id in hass.config_entries.async_entry_ids()
+    assert len(hass.config_entries.async_entries(DOMAIN)) == 1
+    assert entry.data[CONF_DEVICE] == "/dev/ttyACM0"
+    assert entry.data[CONF_METERS] == [METER_MAC]
+
+
+async def test_reconfigure_identity_mismatch_restores_original_path_and_aborts(
+    hass,
+) -> None:
+    """A candidate device with another hardware identity never replaces an entry."""
+    wrong_identity = ValidationResult(
+        path="/dev/ttyACM0",
+        device_mac="0013500000000099",
+        manufacturer="Rainforest",
+        model="EMU-2",
+        firmware="1.2.3",
+        meters=VALIDATION.meters,
+    )
+    client = ReconfigureClient(wrong_identity)
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        unique_id=VALIDATION.device_mac,
+        state=ConfigEntryState.LOADED,
+        data={CONF_DEVICE: "/dev/ttyACM9", CONF_METERS: [METER_MAC]},
+    )
+    entry.runtime_data = Runtime(client)
+    entry.add_to_hass(hass)
+
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN,
+        context={"source": "reconfigure", "entry_id": entry.entry_id},
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {CONF_DEVICE: "/dev/ttyACM0"}
+    )
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "unique_id_mismatch"
+    assert client.paths == ["/dev/ttyACM0", "/dev/ttyACM9"]
+    assert entry.data[CONF_DEVICE] == "/dev/ttyACM9"
+    assert len(hass.config_entries.async_entries(DOMAIN)) == 1
+
+
+async def test_reconfigure_unloaded_entry_uses_and_closes_bounded_temporary_client(
+    hass, monkeypatch
+) -> None:
+    """An unloaded entry uses a temporary client that is closed after validation."""
+    from custom_components.rainforest_emu2 import config_flow
+
+    class TemporaryClient(ReconfigureClient):
+        def __init__(self) -> None:
+            super().__init__(VALIDATION)
+            self.shutdowns = 0
+
+        async def async_shutdown(self) -> None:
+            self.shutdowns += 1
+
+    client = TemporaryClient()
+    monkeypatch.setattr(config_flow, "RavenClient", lambda path: client)
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        unique_id=VALIDATION.device_mac,
+        state=ConfigEntryState.NOT_LOADED,
+        data={CONF_DEVICE: "/dev/ttyACM9", CONF_METERS: [METER_MAC]},
+    )
+    entry.add_to_hass(hass)
+
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN,
+        context={"source": "reconfigure", "entry_id": entry.entry_id},
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {CONF_DEVICE: "/dev/ttyACM0"}
+    )
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+
+    assert result["step_id"] == "meters"
+    assert client.paths == ["/dev/ttyACM0"]
+    assert client.shutdowns == 1
+
+
+async def test_import_rechecks_source_that_becomes_enabled_before_opening(
+    hass, monkeypatch
+) -> None:
+    """A source re-enabled after selection retains ownership at validation time."""
+    from custom_components.rainforest_emu2 import config_flow
+
+    source = MockConfigEntry(
+        domain="rainforest_raven",
+        data={CONF_DEVICE: "/dev/ttyACM0", CONF_MAC: [METER_MAC]},
+        disabled_by=ConfigEntryDisabler.USER,
+    )
+    source.add_to_hass(hass)
+    validate = AsyncMock(return_value=VALIDATION)
+    monkeypatch.setattr(
+        config_flow,
+        "RavenClient",
+        lambda path: type("Client", (), {"async_validate": validate})(),
+    )
+
+    result = await _start_builtin_import(hass, source)
+    source.disabled_by = None
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "builtin_still_enabled"
+    validate.assert_not_awaited()
+
+
+async def test_import_allows_source_removed_after_selection(hass, monkeypatch) -> None:
+    """Removing a previously disabled source does not block the migration flow."""
+    from custom_components.rainforest_emu2 import config_flow
+
+    source = MockConfigEntry(
+        domain="rainforest_raven",
+        data={CONF_DEVICE: "/dev/ttyACM0", CONF_MAC: [METER_MAC]},
+        disabled_by=ConfigEntryDisabler.USER,
+    )
+    source.add_to_hass(hass)
+    validate = AsyncMock(return_value=VALIDATION)
+    monkeypatch.setattr(
+        config_flow,
+        "RavenClient",
+        lambda path: type("Client", (), {"async_validate": validate})(),
+    )
+
+    result = await _start_builtin_import(hass, source)
+    del hass.config_entries._entries[source.entry_id]
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+
+    assert result["step_id"] == "meters"
+    validate.assert_awaited_once()
+
+
+async def test_import_rejects_edited_path_owned_by_enabled_builtin(
+    hass, monkeypatch
+) -> None:
+    """Editing a migration path cannot open a port an enabled built-in owns."""
+    from custom_components.rainforest_emu2 import config_flow
+
+    source = MockConfigEntry(
+        domain="rainforest_raven",
+        data={CONF_DEVICE: "/dev/ttyACM0", CONF_MAC: [METER_MAC]},
+        disabled_by=ConfigEntryDisabler.USER,
+    )
+    owner = MockConfigEntry(
+        domain="rainforest_raven",
+        data={CONF_DEVICE: "/dev/ttyACM1", CONF_MAC: [METER_MAC]},
+    )
+    source.add_to_hass(hass)
+    owner.add_to_hass(hass)
+    validate = AsyncMock(return_value=VALIDATION)
+    monkeypatch.setattr(
+        config_flow,
+        "RavenClient",
+        lambda path: type("Client", (), {"async_validate": validate})(),
+    )
+
+    result = await _start_builtin_import(hass, source)
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {"path": "/dev/ttyACM1"}
+    )
+
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "builtin_still_enabled"
+    validate.assert_not_awaited()
+
+
+async def test_import_validation_error_preserves_editable_path_and_retries(
+    hass, monkeypatch
+) -> None:
+    """A validation error leaves the import path form intact for correction."""
+    from custom_components.rainforest_emu2 import config_flow
+
+    source = MockConfigEntry(
+        domain="rainforest_raven",
+        data={CONF_DEVICE: "/dev/ttyACM0", CONF_MAC: [METER_MAC]},
+        disabled_by=ConfigEntryDisabler.USER,
+    )
+    source.add_to_hass(hass)
+    paths: list[str] = []
+    validate = AsyncMock(
+        side_effect=(
+            RainforestCommunicationError(
+                FailureStage.OPEN, FailureReason.MISSING, retryable=True
+            ),
+            VALIDATION,
+        )
+    )
+    monkeypatch.setattr(
+        config_flow,
+        "RavenClient",
+        lambda path: (
+            paths.append(path) or type("Client", (), {"async_validate": validate})()
+        ),
+    )
+
+    result = await _start_builtin_import(hass, source)
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+
+    assert result["step_id"] == "import_confirm"
+    path_key = next(iter(result["data_schema"].schema))
+    assert path_key.default() == "/dev/ttyACM0"
+    assert result["errors"] == {"base": "device_missing"}
+
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {"path": "/dev/ttyACM2"}
+    )
+
+    assert result["step_id"] == "meters"
+    assert paths == ["/dev/ttyACM0", "/dev/ttyACM2"]
+
+
+async def test_import_no_meter_error_preserves_editable_path_and_retries(
+    hass, monkeypatch
+) -> None:
+    """An empty meter result also leaves the import path available for correction."""
+    from custom_components.rainforest_emu2 import config_flow
+
+    source = MockConfigEntry(
+        domain="rainforest_raven",
+        data={CONF_DEVICE: "/dev/ttyACM0", CONF_MAC: [METER_MAC]},
+        disabled_by=ConfigEntryDisabler.USER,
+    )
+    source.add_to_hass(hass)
+    empty_result = ValidationResult(
+        path="/dev/ttyACM0",
+        device_mac=VALIDATION.device_mac,
+        manufacturer="Rainforest",
+        model="EMU-2",
+        firmware="1.2.3",
+        meters=(),
+    )
+    paths: list[str] = []
+    validate = AsyncMock(side_effect=(empty_result, VALIDATION))
+    monkeypatch.setattr(
+        config_flow,
+        "RavenClient",
+        lambda path: (
+            paths.append(path) or type("Client", (), {"async_validate": validate})()
+        ),
+    )
+
+    result = await _start_builtin_import(hass, source)
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+
+    assert result["step_id"] == "import_confirm"
+    path_key = next(iter(result["data_schema"].schema))
+    assert path_key.default() == "/dev/ttyACM0"
+    assert result["errors"] == {"base": "no_paired_meters"}
+
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {"path": "/dev/ttyACM2"}
+    )
+
+    assert result["step_id"] == "meters"
+    assert paths == ["/dev/ttyACM0", "/dev/ttyACM2"]
+
+
+async def test_reconfigure_flow_conflict_restores_loaded_client_before_abort(
+    hass,
+) -> None:
+    """An actual HA unique-ID progress abort rolls the live client back first."""
+    client = ReconfigureClient(VALIDATION)
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        unique_id=VALIDATION.device_mac,
+        state=ConfigEntryState.LOADED,
+        data={CONF_DEVICE: "/dev/ttyACM9", CONF_METERS: [METER_MAC]},
+    )
+    entry.runtime_data = Runtime(client)
+    entry.add_to_hass(hass)
+
+    competing = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": "user"}
+    )
+    competing_flow = hass.config_entries.flow._progress[competing["flow_id"]]
+    await competing_flow.async_set_unique_id(VALIDATION.device_mac)
+
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN,
+        context={"source": "reconfigure", "entry_id": entry.entry_id},
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {CONF_DEVICE: "/dev/ttyACM0"}
+    )
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "already_in_progress"
+    assert client.paths == ["/dev/ttyACM0", "/dev/ttyACM9"]
+    assert client.connected_path == "/dev/ttyACM9"
+    hass.config_entries.flow.async_abort(competing["flow_id"])
+
+
+async def test_reconfigure_cancellation_restores_loaded_client(
+    hass, monkeypatch
+) -> None:
+    """Cancellation after candidate validation restores the old client before escape."""
+    from custom_components.rainforest_emu2 import config_flow
+
+    client = ReconfigureClient(VALIDATION)
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        unique_id=VALIDATION.device_mac,
+        state=ConfigEntryState.LOADED,
+        data={CONF_DEVICE: "/dev/ttyACM9", CONF_METERS: [METER_MAC]},
+    )
+    entry.runtime_data = Runtime(client)
+    entry.add_to_hass(hass)
+
+    async def cancel_unique_id(self, unique_id: str) -> None:
+        raise asyncio.CancelledError
+
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN,
+        context={"source": "reconfigure", "entry_id": entry.entry_id},
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {CONF_DEVICE: "/dev/ttyACM0"}
+    )
+    monkeypatch.setattr(
+        config_flow.RainforestEmu2ConfigFlow,
+        "async_set_unique_id",
+        cancel_unique_id,
+    )
+
+    with pytest.raises(asyncio.CancelledError):
+        await hass.config_entries.flow.async_configure(result["flow_id"], {})
+
+    assert client.paths == ["/dev/ttyACM0", "/dev/ttyACM9"]
+    assert client.connected_path == "/dev/ttyACM9"
+
+
+async def test_cancellation_during_reconfigure_restore_waits_then_propagates(
+    hass,
+) -> None:
+    """A new cancellation waits for rollback instead of detaching it."""
+
+    class BlockingRestoreClient(ReconfigureClient):
+        def __init__(self) -> None:
+            super().__init__(VALIDATION)
+            self.restore_started = asyncio.Event()
+            self.restore_release = asyncio.Event()
+            self.restore_completed = False
+
+        async def async_restore_path(self, path: str) -> None:
+            self.paths.append(path)
+            self.restore_started.set()
+            await self.restore_release.wait()
+            self.connected_path = path
+            self.restore_completed = True
+
+    client = BlockingRestoreClient()
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        unique_id=VALIDATION.device_mac,
+        state=ConfigEntryState.LOADED,
+        data={CONF_DEVICE: "/dev/ttyACM9", CONF_METERS: [METER_MAC]},
+    )
+    entry.runtime_data = Runtime(client)
+    entry.add_to_hass(hass)
+    competing = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": "user"}
+    )
+    competing_flow = hass.config_entries.flow._progress[competing["flow_id"]]
+    await competing_flow.async_set_unique_id(VALIDATION.device_mac)
+
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN,
+        context={"source": "reconfigure", "entry_id": entry.entry_id},
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {CONF_DEVICE: "/dev/ttyACM0"}
+    )
+    configure = asyncio.create_task(
+        hass.config_entries.flow.async_configure(result["flow_id"], {})
+    )
+    await client.restore_started.wait()
+    configure.cancel()
+    await asyncio.sleep(0)
+
+    assert not configure.done()
+    client.restore_release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await configure
+
+    assert client.restore_completed
+    assert client.connected_path == "/dev/ttyACM9"
+    hass.config_entries.flow.async_abort(competing["flow_id"])
+
+
+async def test_cancellation_during_temporary_shutdown_waits_then_propagates(
+    hass, monkeypatch
+) -> None:
+    """Cancellation cannot be swallowed while an unloaded entry's client shuts down."""
+    from custom_components.rainforest_emu2 import config_flow
+
+    class BlockingTemporaryClient(ReconfigureClient):
+        def __init__(self) -> None:
+            super().__init__(VALIDATION)
+            self.shutdown_started = asyncio.Event()
+            self.shutdown_release = asyncio.Event()
+            self.shutdown_completed = False
+
+        async def async_shutdown(self) -> None:
+            self.shutdown_started.set()
+            await self.shutdown_release.wait()
+            self.shutdown_completed = True
+
+    client = BlockingTemporaryClient()
+    monkeypatch.setattr(config_flow, "RavenClient", lambda path: client)
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        unique_id=VALIDATION.device_mac,
+        state=ConfigEntryState.NOT_LOADED,
+        data={CONF_DEVICE: "/dev/ttyACM9", CONF_METERS: [METER_MAC]},
+    )
+    entry.add_to_hass(hass)
+
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN,
+        context={"source": "reconfigure", "entry_id": entry.entry_id},
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {CONF_DEVICE: "/dev/ttyACM0"}
+    )
+    configure = asyncio.create_task(
+        hass.config_entries.flow.async_configure(result["flow_id"], {})
+    )
+    await client.shutdown_started.wait()
+    configure.cancel()
+    await asyncio.sleep(0)
+
+    assert not configure.done()
+    client.shutdown_release.set()
+    with pytest.raises(asyncio.CancelledError):
+        await configure
+
+    assert client.shutdown_completed
+
+
+async def test_inner_cleanup_cancellation_propagates_without_spinning() -> None:
+    """An internally cancelled cleanup task exits once instead of busy-looping."""
+    from custom_components.rainforest_emu2.config_flow import RainforestEmu2ConfigFlow
+
+    async def cancelled_cleanup() -> None:
+        raise asyncio.CancelledError
+
+    flow = RainforestEmu2ConfigFlow()
+    with pytest.raises(asyncio.CancelledError):
+        await flow._async_wait_for_cleanup(cancelled_cleanup())

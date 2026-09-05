@@ -982,6 +982,32 @@ async def test_reconfigure_success_closes_current_and_leaves_candidate_closed(
     assert client._device is None
 
 
+async def test_restore_path_reopens_original_transport_after_reconfigure(
+    fast_lifecycle_timeouts: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A rejected otherwise-valid candidate can return to the original transport."""
+    current = PollingRavenDevice()
+    _prepare_polling_connection(current)
+    _add_polling_cycle(current)
+    candidate = FakeRavenDevice()
+    _successful_fake(candidate)
+    restored = PollingRavenDevice()
+    _prepare_polling_connection(restored)
+    factory = FakeRavenFactory(current, candidate, restored)
+    monkeypatch.setattr(communication, "RAVEnSerialDevice", factory)
+    client = RavenClient("/dev/ttyACM0")
+    await client.async_refresh((METER_MAC,))
+
+    await client.async_reconfigure_path("/dev/ttyUSB0")
+    await client.async_restore_path("/dev/ttyACM0")
+
+    assert client.path == "/dev/ttyACM0"
+    assert client._device is restored
+    assert factory.calls[-1][0] == "/dev/ttyACM0"
+    await client.async_shutdown()
+
+
 async def test_reconfigure_failure_restores_original_path_connection_and_metadata(
     fast_lifecycle_timeouts: None,
     monkeypatch: pytest.MonkeyPatch,

@@ -927,6 +927,20 @@ class RavenClient:
                     self.device_info = original_info
                 raise
 
+    async def async_restore_path(self, path: str) -> None:
+        """Return to a previously configured path after rejecting a candidate."""
+
+        async with self._command_lock:
+            cleanup_error = await self._async_close_persistent(
+                graceful=True,
+                release_lease=True,
+            )
+            if cleanup_error is not None:
+                raise cleanup_error
+            self.path = path
+            self.device_info = None
+            await self._async_connect()
+
     async def async_validate(self) -> ValidationResult:
         """Validate a device and always release its transport and port lock."""
 

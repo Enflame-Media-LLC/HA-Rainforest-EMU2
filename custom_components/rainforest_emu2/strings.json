@@ -4,7 +4,8 @@
       "user": {
         "data": {
           "action": "Setup option",
-          "device": "Detected Rainforest device"
+          "device": "Detected Rainforest device",
+          "entry_id": "Disabled built-in Rainforest entry"
         },
         "description": "Choose a detected device, rescan, or use the advanced local-path option."
       },
@@ -20,6 +21,25 @@
         "data": {
           "meters": "Meters"
         }
+      },
+      "import_builtin": {
+        "data": {
+          "entry_id": "Disabled built-in Rainforest entry"
+        }
+      },
+      "import_confirm": {
+        "data": {
+          "path": "Local serial device path"
+        },
+        "description": "Review or correct the prior local serial path before validating the replacement integration."
+      },
+      "reconfigure": {
+        "data": {
+          "device": "Local serial device path"
+        }
+      },
+      "reconfigure_confirm": {
+        "description": "Confirm to rescan meters and validate this Rainforest device."
       }
     },
     "error": {
@@ -37,7 +57,10 @@
     },
     "abort": {
       "already_configured": "This Rainforest device is already configured.",
-      "already_in_progress": "Rainforest device setup is already in progress."
+      "already_in_progress": "Rainforest device setup is already in progress.",
+      "builtin_still_enabled": "Disable or remove the built-in Rainforest RAVEn entry before importing its settings.",
+      "builtin_not_found": "The selected built-in Rainforest RAVEn entry is no longer available.",
+      "unique_id_mismatch": "The selected device does not match this Rainforest entry."
     }
   }
 }
