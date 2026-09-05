@@ -1,1 +1,43 @@
-{}
+{
+  "config": {
+    "step": {
+      "user": {
+        "data": {
+          "action": "Setup option",
+          "device": "Detected Rainforest device"
+        },
+        "description": "Choose a detected device, rescan, or use the advanced local-path option."
+      },
+      "advanced": {
+        "data": {
+          "path": "Local serial device path"
+        }
+      },
+      "confirm": {
+        "description": "Confirm to connect to the selected Rainforest device."
+      },
+      "meters": {
+        "data": {
+          "meters": "Meters"
+        }
+      }
+    },
+    "error": {
+      "device_missing": "The selected device is no longer available.",
+      "device_permission": "Home Assistant cannot access the selected device.",
+      "device_busy": "The selected device is currently in use.",
+      "open_timeout": "The device did not open in time.",
+      "response_timeout": "The device did not respond in time.",
+      "no_response": "The device did not respond.",
+      "no_paired_meters": "No paired meters were found.",
+      "no_supported_meters": "No supported meter was selected or found.",
+      "identity_invalid": "The device returned an invalid identity.",
+      "cleanup_failed": "The device connection could not be closed safely.",
+      "unknown": "The device could not be set up."
+    },
+    "abort": {
+      "already_configured": "This Rainforest device is already configured.",
+      "already_in_progress": "Rainforest device setup is already in progress."
+    }
+  }
+}
