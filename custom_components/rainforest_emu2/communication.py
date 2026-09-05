@@ -4,15 +4,19 @@ from __future__ import annotations
 
 import asyncio
 import errno
+import logging
+import math
 import os
 import re
 from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from enum import StrEnum
+from types import MappingProxyType
 from typing import Any
 
 from aioraven.serial import RAVEnSerialDevice
+from iso4217 import Currency
 
 from .const import (
     ABORT_TIMEOUT,
@@ -23,7 +27,10 @@ from .const import (
     OPEN_TIMEOUT,
     QUERY_TIMEOUT,
     SETTLE_DELAY,
+    WATCHDOG_MARGIN,
 )
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class FailureStage(StrEnum):
@@ -142,6 +149,22 @@ def snapshot_field_key(field: str, meter_mac_hex: str | None = None) -> str:
     """Return the canonical key for a device or meter snapshot field."""
 
     return f"meter:{meter_mac_hex}:{field}" if meter_mac_hex else f"device:{field}"
+
+
+def cycle_budget(meter_count: int, *, needs_open: bool) -> float:
+    """Return a watchdog budget that cannot preempt per-command deadlines."""
+
+    commands = meter_count * 3 + 1
+    open_budget = (
+        OPEN_TIMEOUT
+        + SETTLE_DELAY
+        + sum(METER_LIST_BACKOFFS)
+        + len(METER_LIST_BACKOFFS) * METER_LIST_TIMEOUT
+        + QUERY_TIMEOUT
+        if needs_open
+        else 0.0
+    )
+    return open_budget + commands * QUERY_TIMEOUT + CLOSE_TIMEOUT + WATCHDOG_MARGIN
 
 
 def canonical_port_key(path: os.PathLike[str] | str) -> str:
@@ -335,6 +358,9 @@ class RavenClient:
         self.registry = registry or PortLockRegistry()
         self.device_info: Any = None
         self._device: Any = None
+        self._command_lock = asyncio.Lock()
+        self._lease_context: Any = None
+        self._lease_owner: _PortLockLease | None = None
 
     @staticmethod
     def _error(
@@ -432,7 +458,11 @@ class RavenClient:
                 async with asyncio.timeout(CLOSE_TIMEOUT):
                     await device.close()
             except asyncio.CancelledError:
-                await self._async_abort_device(device)
+                try:
+                    await self._async_abort_device(device)
+                finally:
+                    if self._device is device:
+                        self._device = None
                 raise
             except Exception:
                 # A failed graceful close is recovered only by a successful,
@@ -600,8 +630,311 @@ class RavenClient:
             )
         return tuple(records)
 
+    async def _async_acquire_persistent_lease(self) -> None:
+        """Acquire and retain this client's port lease."""
+
+        if self._lease_context is not None:
+            return
+        context = self.registry.acquire(self.path)
+        owner = await context.__aenter__()
+        self._lease_context = context
+        self._lease_owner = owner
+
+    async def _async_release_persistent_lease(self) -> None:
+        """Release a retained port lease exactly once."""
+
+        context = self._lease_context
+        if context is None:
+            return
+        self._lease_context = None
+        self._lease_owner = None
+        await context.__aexit__(None, None, None)
+
+    async def _async_connect(self) -> None:
+        """Open, synchronize, and identify a persistent transport."""
+
+        if self._device is not None:
+            return
+        await self._async_acquire_persistent_lease()
+        device: Any = None
+        try:
+            device = await self._async_open()
+            meter_list = await self._async_synchronize(device)
+            if not hasattr(meter_list, "meter_mac_ids"):
+                raise self._error(FailureStage.SYNC, FailureReason.MALFORMED)
+            info = await self._async_device_info(device)
+            self.registry.alias(
+                self.path,
+                info.device_mac_id.hex(),
+                owner=self._lease_owner,
+            )
+            self.device_info = info
+        except BaseException as err:
+            cleanup_target = device or self._device
+            if cleanup_target is not None:
+                cleanup_error = await self._async_cleanup_device(
+                    cleanup_target, graceful=False
+                )
+                if cleanup_error is not None:
+                    err.add_note(f"secondary failure: {cleanup_error}")
+            raise
+
+    async def _async_close_persistent(
+        self,
+        *,
+        graceful: bool,
+        release_lease: bool,
+    ) -> RainforestCommunicationError | None:
+        """Close the current transport and optionally relinquish ownership."""
+
+        cleanup_error: RainforestCommunicationError | None = None
+        try:
+            if self._device is not None:
+                cleanup_error = await self._async_cleanup_device(
+                    self._device,
+                    graceful=graceful,
+                )
+        finally:
+            if release_lease:
+                await self._async_release_persistent_lease()
+        return cleanup_error
+
+    @staticmethod
+    def _parse_number(value: object) -> float | None:
+        """Parse one finite protocol number without inventing a value."""
+
+        if value is None or isinstance(value, bool):
+            return None
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            return None
+        return parsed if math.isfinite(parsed) else None
+
+    async def _async_required_poll(self, call: Any) -> Any:
+        """Run one required poll command inside its own deadline."""
+
+        try:
+            async with asyncio.timeout(QUERY_TIMEOUT):
+                response = await call()
+        except asyncio.CancelledError:
+            raise
+        except Exception as err:
+            raise self._translate_error(FailureStage.POLL, err) from err
+        if response is None:
+            raise self._error(FailureStage.POLL, FailureReason.NO_RESPONSE)
+        return response
+
+    async def _async_optional_poll(self, call: Any) -> Any:
+        """Run an optional command, isolating only parsing/schema failures."""
+
+        try:
+            async with asyncio.timeout(QUERY_TIMEOUT):
+                return await call()
+        except asyncio.CancelledError:
+            raise
+        except (TypeError, ValueError):
+            return None
+        except Exception as err:
+            raise self._translate_error(FailureStage.POLL, err) from err
+
+    async def _async_collect_cycle(
+        self,
+        meter_macs: tuple[bytes, ...],
+    ) -> RavenSnapshot:
+        """Collect one complete cycle into a new, unpublished result."""
+
+        device = self._device
+        if device is None:
+            raise self._error(FailureStage.POLL, FailureReason.NO_RESPONSE)
+
+        meters: dict[str, MeterSnapshot] = {}
+        present_fields: set[str] = set()
+        for meter_mac in meter_macs:
+            meter_key = meter_mac.hex()
+            summation = await self._async_required_poll(
+                lambda meter_mac=meter_mac: device.get_current_summation_delivered(
+                    meter=meter_mac,
+                    refresh=True,
+                )
+            )
+            if getattr(summation, "meter_mac_id", meter_mac) != meter_mac:
+                raise self._error(FailureStage.POLL, FailureReason.MALFORMED)
+            delivered = self._parse_number(
+                getattr(summation, "summation_delivered", None)
+            )
+            received = self._parse_number(
+                getattr(summation, "summation_received", None)
+            )
+            if delivered is None and received is None:
+                raise self._error(FailureStage.POLL, FailureReason.MALFORMED)
+
+            demand_response = await self._async_required_poll(
+                lambda meter_mac=meter_mac: device.get_instantaneous_demand(
+                    meter=meter_mac,
+                    refresh=True,
+                )
+            )
+            if getattr(demand_response, "meter_mac_id", meter_mac) != meter_mac:
+                raise self._error(FailureStage.POLL, FailureReason.MALFORMED)
+            demand = self._parse_number(getattr(demand_response, "demand", None))
+            if demand is None:
+                raise self._error(FailureStage.POLL, FailureReason.MALFORMED)
+
+            price_response = await self._async_optional_poll(
+                lambda meter_mac=meter_mac: device.get_current_price(
+                    meter=meter_mac,
+                    refresh=True,
+                )
+            )
+            price: float | None = None
+            currency: str | None = None
+            if (
+                price_response is not None
+                and getattr(price_response, "meter_mac_id", meter_mac) == meter_mac
+            ):
+                parsed_price = self._parse_number(
+                    getattr(price_response, "price", None)
+                )
+                raw_currency = getattr(price_response, "currency", None)
+                if parsed_price is not None and isinstance(raw_currency, Currency):
+                    price = parsed_price
+                    currency = raw_currency.value
+
+            if demand is not None:
+                present_fields.add(snapshot_field_key("demand", meter_key))
+            if delivered is not None:
+                present_fields.add(snapshot_field_key("delivered", meter_key))
+            if received is not None:
+                present_fields.add(snapshot_field_key("received", meter_key))
+            if price is not None:
+                present_fields.add(snapshot_field_key("price", meter_key))
+            meters[meter_key] = MeterSnapshot(
+                demand=demand,
+                delivered=delivered,
+                received=received,
+                price=price,
+                currency=currency,
+            )
+
+        network = await self._async_optional_poll(device.get_network_info)
+        signal_strength: int | None = None
+        if network is not None:
+            raw_signal = getattr(network, "link_strength", None)
+            if (
+                isinstance(raw_signal, int)
+                and not isinstance(raw_signal, bool)
+                and 0 <= raw_signal <= 255
+            ):
+                signal_strength = raw_signal
+                present_fields.add(snapshot_field_key("signal_strength"))
+
+        return RavenSnapshot(
+            MappingProxyType(meters),
+            signal_strength,
+            frozenset(present_fields),
+        )
+
+    async def async_refresh(
+        self,
+        meter_macs: tuple[bytes, ...],
+    ) -> RavenSnapshot:
+        """Poll every selected meter, retrying one whole failed cycle."""
+
+        async with self._command_lock:
+            last_error: RainforestCommunicationError | None = None
+            for attempt in range(2):
+                needs_open = self._device is None
+                try:
+                    async with asyncio.timeout(
+                        cycle_budget(len(meter_macs), needs_open=needs_open)
+                    ):
+                        if needs_open:
+                            await self._async_connect()
+                        return await self._async_collect_cycle(meter_macs)
+                except asyncio.CancelledError as err:
+                    cleanup_error = await self._async_close_persistent(
+                        graceful=False,
+                        release_lease=False,
+                    )
+                    if cleanup_error is not None:
+                        err.add_note(f"secondary failure: {cleanup_error}")
+                    raise
+                except BaseException as err:
+                    last_error = self._translate_error(FailureStage.POLL, err)
+                    cleanup_error = await self._async_close_persistent(
+                        graceful=False,
+                        release_lease=False,
+                    )
+                    if cleanup_error is not None:
+                        last_error.add_note(f"secondary failure: {cleanup_error}")
+                    if attempt == 1:
+                        raise last_error from err
+            raise last_error or self._error(
+                FailureStage.POLL, FailureReason.NO_RESPONSE
+            )
+
+    async def async_set_path(self, path: str) -> None:
+        """Replace the path after safely relinquishing the old transport."""
+
+        async with self._command_lock:
+            if path == self.path:
+                return
+            cleanup_error = await self._async_close_persistent(
+                graceful=True,
+                release_lease=True,
+            )
+            if cleanup_error is not None:
+                raise cleanup_error
+            self.path = path
+            self.device_info = None
+
+    async def async_reconfigure_path(self, path: str) -> ValidationResult:
+        """Validate a replacement path and restore the original on failure."""
+
+        async with self._command_lock:
+            original_path = self.path
+            original_info = self.device_info
+            cleanup_error = await self._async_close_persistent(
+                graceful=True,
+                release_lease=True,
+            )
+            if cleanup_error is not None:
+                raise cleanup_error
+
+            self.path = path
+            try:
+                return await self._async_validate()
+            except BaseException as candidate_error:
+                self.path = original_path
+                self.device_info = original_info
+                try:
+                    await self._async_connect()
+                except BaseException as restore_error:
+                    restored_error = self._translate_error(
+                        FailureStage.OPEN, restore_error
+                    )
+                    candidate_error.add_note(
+                        f"secondary restoration failure: {restored_error}"
+                    )
+                    _LOGGER.warning(
+                        "Could not restore Rainforest transport after reconfigure "
+                        "failure (stage=%s, reason=%s)",
+                        restored_error.stage.value,
+                        restored_error.reason.value,
+                    )
+                finally:
+                    self.device_info = original_info
+                raise
+
     async def async_validate(self) -> ValidationResult:
         """Validate a device and always release its transport and port lock."""
+
+        async with self._command_lock:
+            return await self._async_validate()
+
+    async def _async_validate(self) -> ValidationResult:
+        """Validate a device while this client's lifecycle lock is already held."""
 
         async with self.registry.acquire(self.path) as owner:
             device: Any = None
@@ -613,7 +946,6 @@ class RavenClient:
                     raise self._error(FailureStage.SYNC, FailureReason.MALFORMED)
 
                 info = await self._async_device_info(device)
-                self.device_info = info
                 device_mac = info.device_mac_id.hex()
                 self.registry.alias(self.path, device_mac, owner=owner)
                 meters = await self._async_meter_records(device, meter_macs)
@@ -638,16 +970,16 @@ class RavenClient:
             cleanup_error = await self._async_cleanup_device(device, graceful=True)
             if cleanup_error is not None:
                 raise cleanup_error
+            self.device_info = info
             return result
 
     async def async_shutdown(self) -> None:
         """Bound shutdown and force-abort when graceful close cannot finish."""
 
-        if self._device is None:
-            return
-        cleanup_error = await self._async_cleanup_device(
-            self._device,
-            graceful=True,
-        )
-        if cleanup_error is not None:
-            raise cleanup_error
+        async with self._command_lock:
+            cleanup_error = await self._async_close_persistent(
+                graceful=True,
+                release_lease=True,
+            )
+            if cleanup_error is not None:
+                raise cleanup_error
