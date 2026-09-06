@@ -5,22 +5,22 @@
   "config_flow": true,
   "dependencies": ["usb"],
   "documentation": "https://github.com/Enflame-Media-LLC/HA-Rainforest-EMU2",
-  "issue_tracker": "https://github.com/Enflame-Media-LLC/HA-Rainforest-EMU2/issues",
   "integration_type": "hub",
   "iot_class": "local_polling",
+  "issue_tracker": "https://github.com/Enflame-Media-LLC/HA-Rainforest-EMU2/issues",
   "requirements": ["aioraven==0.7.1"],
   "usb": [
     {
-      "vid": "04B4",
-      "pid": "0003",
+      "description": "*emu-2*",
       "manufacturer": "*rainforest*",
-      "description": "*emu-2*"
+      "pid": "0003",
+      "vid": "04B4"
     },
     {
-      "vid": "0403",
-      "pid": "8A28",
+      "description": "*raven*",
       "manufacturer": "*rainforest*",
-      "description": "*raven*"
+      "pid": "8A28",
+      "vid": "0403"
     }
   ],
   "version": "0.1.0"
