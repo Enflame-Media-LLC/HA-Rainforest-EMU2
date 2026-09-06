@@ -1,7 +1,6 @@
 {
   "domain": "rainforest_emu2",
   "name": "Rainforest EMU-2 and RAVEn Enhanced",
-  "version": "0.1.0",
   "codeowners": ["@ENFM-RyanJ"],
   "config_flow": true,
   "dependencies": ["usb"],
@@ -23,5 +22,6 @@
       "manufacturer": "*rainforest*",
       "description": "*raven*"
     }
-  ]
+  ],
+  "version": "0.1.0"
 }

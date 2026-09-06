@@ -5,6 +5,14 @@ description = "Home Assistant integration for Rainforest EMU-2 and RAVEn devices
 requires-python = ">=3.13"
 dependencies = ["aioraven==0.7.1"]
 
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["custom_components*"]
+exclude = ["tests*", "brand*"]
+
 [project.optional-dependencies]
 test = [
   "pytest>=8.0",
