@@ -7,7 +7,7 @@ containers, and virtual machines where serial paths can move or disappear.
 ## Requirements
 
 - Home Assistant 2026.3.0 or newer
-- Python 3.13 or newer when Home Assistant installs the integration
+- Python 3.14.2 or newer when Home Assistant installs the integration
 - Rainforest EMU-2 (`04B4:0003`) or legacy RAVEn (`0403:8A28`) USB gateway
 - The gateway serial device exposed to Home Assistant
 

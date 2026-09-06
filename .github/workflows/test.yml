@@ -10,7 +10,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python: ["3.13"]
+        python: ["3.14"]
         home_assistant: ["2026.3.0", "stable"]
     steps:
       - uses: actions/checkout@v4

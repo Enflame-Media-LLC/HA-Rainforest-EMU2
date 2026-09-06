@@ -6,7 +6,7 @@
 
 **Architecture:** A distinct `rainforest_emu2` integration wraps upstream `aioraven==0.7.1` behind one communication boundary. Config flow owns discovery and validation, the coordinator owns persistent polling and full-cycle recovery, and entity/diagnostic layers consume immutable results without touching the serial transport.
 
-**Tech Stack:** Python 3.13+, Home Assistant 2026.3.0+, `aioraven==0.7.1`, PySerial/`serial_asyncio_fast`, pytest, `pytest-homeassistant-custom-component`, Ruff, mypy, Hassfest, HACS Action, GitHub Actions.
+**Tech Stack:** Python 3.14.2+, Home Assistant 2026.3.0+, `aioraven==0.7.1`, PySerial/`serial_asyncio_fast`, pytest, `pytest-homeassistant-custom-component`, Ruff, mypy, Hassfest, HACS Action, GitHub Actions.
 
 **Spec:** `docs/superpowers/specs/2026-09-04-rainforest-emu2-integration-design.md`
 
@@ -159,7 +159,7 @@ LOCK_TIMEOUT = 1.0
 WATCHDOG_MARGIN = 1.0
 ```
 
-Keep `__init__.py` import-safe until Task 7. Configure Ruff for Python 3.13 and 88-character formatting; enable `E`, `F`, `I`, `UP`, `B`, `ASYNC`, and `RUF` rules. Add the standard autouse `enable_custom_integrations` fixture in root `tests/conftest.py`.
+Keep `__init__.py` import-safe until Task 7. Configure Ruff for Python 3.14 and 88-character formatting; enable `E`, `F`, `I`, `UP`, `B`, `ASYNC`, and `RUF` rules. Add the standard autouse `enable_custom_integrations` fixture in root `tests/conftest.py`.
 
 - [ ] **Step 4: Run the foundation checks**
 
@@ -853,7 +853,7 @@ Create a square PNG icon at least 256×256 with transparent background and ensur
 
 - [ ] **Step 5: Add CI workflows**
 
-`test.yml` runs pytest on Python 3.13 with a matrix containing Home Assistant `2026.3.0` and latest stable, installing dependencies with pip's resolver. `lint.yml` runs `ruff format --check`, `ruff check`, and mypy. `hacs.yml` uses `hacs/action@main`; `hassfest.yml` uses `home-assistant/actions/hassfest@master`.
+`test.yml` runs pytest on Python 3.14 with a matrix containing Home Assistant `2026.3.0` and latest stable, installing dependencies with pip's resolver. `lint.yml` runs `ruff format --check`, `ruff check`, and mypy. `hacs.yml` uses `hacs/action@main`; `hassfest.yml` uses `home-assistant/actions/hassfest@master`.
 
 `release.yml` runs only on `v*` tags, reads `manifest.json`, exits unless tag `v${manifest.version}` matches, reruns tests/validation, and creates a GitHub Release using the repository source archive. It does not create or configure `zip_release`.
 
