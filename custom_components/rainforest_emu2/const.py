@@ -5,6 +5,7 @@ from datetime import timedelta
 from homeassistant.const import Platform
 
 DOMAIN = "rainforest_emu2"
+VERSION = "0.1.0"
 PLATFORMS = [Platform.SENSOR]
 
 CONF_METERS = "meters"

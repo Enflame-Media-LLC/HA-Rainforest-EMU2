@@ -99,6 +99,54 @@ class RuntimeClient:
             raise self.shutdown_error
 
 
+async def test_setup_exposes_only_selected_meters(hass, monkeypatch):
+    """An unselected paired meter must not produce entities or diagnostics."""
+    from dataclasses import replace
+
+    from custom_components.rainforest_emu2 import async_setup_entry, diagnostics, sensor
+
+    other = MeterRecord(
+        bytes.fromhex("0013500102030406"), "0013500102030406", "Other", "electric"
+    )
+    client = RuntimeClient(
+        validation=replace(VALIDATION, meters=(other, *VALIDATION.meters))
+    )
+    entry = _entry()
+    entry.add_to_hass(hass)
+    entry._async_set_state(hass, ConfigEntryState.SETUP_IN_PROGRESS, None)
+    monkeypatch.setattr(
+        "custom_components.rainforest_emu2.RavenClient", lambda path: client
+    )
+    monkeypatch.setattr(hass.config_entries, "async_forward_entry_setups", AsyncMock())
+    assert await async_setup_entry(hass, entry)
+    entities = []
+    await sensor.async_setup_entry(hass, entry, entities.extend)
+    assert len(entities) == 5
+    assert all(other.mac_hex not in entity.unique_id for entity in entities)
+    payload = await diagnostics.async_get_config_entry_diagnostics(hass, entry)
+    assert payload["connection"]["selected_meter_count"] == 1
+    assert entry.runtime_data.validation.meters == VALIDATION.meters
+
+
+async def test_setup_missing_selected_meter_requires_reconfigure(hass, monkeypatch):
+    """Missing persisted selection is permanent, not endless refresh retry."""
+    from dataclasses import replace
+
+    from custom_components.rainforest_emu2 import async_setup_entry
+
+    client = RuntimeClient(validation=replace(VALIDATION, meters=()))
+    entry = _entry()
+    entry.add_to_hass(hass)
+    monkeypatch.setattr(
+        "custom_components.rainforest_emu2.RavenClient", lambda path: client
+    )
+    monkeypatch.setattr(hass.config_entries, "async_forward_entry_setups", AsyncMock())
+    with pytest.raises(ConfigEntryError, match="reconfigure"):
+        await async_setup_entry(hass, entry)
+    assert client.refresh_calls == []
+    assert client.shutdown_calls == 1
+
+
 def _entry(**data_overrides: object) -> MockConfigEntry:
     """Create one persisted entry with valid, explicitly selected metadata."""
 

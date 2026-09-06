@@ -517,7 +517,10 @@ async def test_scan_assigns_distinct_opaque_tokens_to_colliding_labels(
 
     candidates = await config_flow.async_scan_supported_ports(hass)
 
-    assert [candidate.label for candidate in candidates] == ["EMU-2", "EMU-2"]
+    assert [candidate.label for candidate in candidates] == [
+        "EMU-2 (/dev/ttyACM0; serial first)",
+        "EMU-2 (/dev/ttyACM1; serial second)",
+    ]
     assert len({candidate.token for candidate in candidates}) == 2
 
 
@@ -573,14 +576,12 @@ async def test_duplicate_hardware_aborts_when_final_mac_is_known(
         result["flow_id"], {"action": "select", CONF_DEVICE: token}
     )
     result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
-    assert result["step_id"] == "meters"
-
-    result = await hass.config_entries.flow.async_configure(
-        result["flow_id"], {CONF_METERS: [METER_MAC]}
-    )
-
     assert result["type"] is FlowResultType.ABORT
     assert result["reason"] == "already_configured"
+    existing = hass.config_entries.async_entries(DOMAIN)[0]
+    assert existing.data[CONF_DEVICE] == "/dev/ttyACM0"
+    assert existing.data["usb_serial"] == "new-usb-serial"
+    assert existing.data[CONF_METERS] == [METER_MAC]
 
 
 @pytest.mark.parametrize("scanner_fails", (False, True))
@@ -1008,6 +1009,54 @@ async def test_reconfigure_loaded_entry_uses_existing_client_and_updates_same_en
     assert len(hass.config_entries.async_entries(DOMAIN)) == 1
     assert entry.data[CONF_DEVICE] == "/dev/ttyACM0"
     assert entry.data[CONF_METERS] == [METER_MAC]
+
+
+async def test_abandon_reconfigure_meters_keeps_original_runtime(hass):
+    """Cancelling the staged meter form cannot change active entry settings."""
+    client = ReconfigureClient(VALIDATION)
+    client.connected_path = "/dev/ttyACM9"
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        unique_id=VALIDATION.device_mac,
+        state=ConfigEntryState.LOADED,
+        data={CONF_DEVICE: "/dev/ttyACM9", CONF_METERS: [METER_MAC]},
+    )
+    entry.runtime_data = Runtime(client)
+    entry.add_to_hass(hass)
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": "reconfigure", "entry_id": entry.entry_id}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {CONF_DEVICE: "/dev/ttyACM0"}
+    )
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+    assert result["step_id"] == "meters"
+    hass.config_entries.flow.async_abort(result["flow_id"])
+    assert client.connected_path == "/dev/ttyACM9"
+    assert entry.data[CONF_DEVICE] == "/dev/ttyACM9"
+
+
+def test_selector_labels_distinguish_identical_devices():
+    """Opaque values must still have useful user-visible path/serial context."""
+    from custom_components.rainforest_emu2.config_flow import _supported_candidates
+
+    ports = [
+        SimpleNamespace(
+            device=f"/dev/ttyACM{index}",
+            vid=0x04B4,
+            pid=0x0003,
+            description="EMU-2",
+            serial_number=f"serial-{index}",
+            location=f"1-{index}",
+        )
+        for index in (0, 1)
+    ]
+    candidates = _supported_candidates(ports)
+    assert candidates[0].label != candidates[1].label
+    for index, candidate in enumerate(candidates):
+        assert candidate.path in candidate.label
+        assert f"serial-{index}" in candidate.label
+        assert f"1-{index}" in candidate.label
 
 
 async def test_reconfigure_identity_mismatch_restores_original_path_and_aborts(

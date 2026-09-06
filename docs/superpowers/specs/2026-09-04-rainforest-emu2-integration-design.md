@@ -1,9 +1,9 @@
 # Rainforest EMU-2 and RAVEn Enhanced Integration Design
 
-**Status:** Approved after usability and setup review  
-**Date:** 2026-09-04  
-**Repository:** https://github.com/Enflame-Media-LLC/HA-Rainforest-EMU2  
-**Integration domain:** `rainforest_emu2`  
+**Status:** Approved after usability and setup review
+**Date:** 2026-09-04
+**Repository:** https://github.com/Enflame-Media-LLC/HA-Rainforest-EMU2
+**Integration domain:** `rainforest_emu2`
 **Minimum Home Assistant version:** 2026.3.0
 
 ## Purpose

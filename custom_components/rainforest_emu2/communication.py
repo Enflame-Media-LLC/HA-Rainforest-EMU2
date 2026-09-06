@@ -11,9 +11,11 @@ import re
 from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from enum import StrEnum
 from types import MappingProxyType
 from typing import Any
+from weakref import WeakKeyDictionary
 
 from aioraven.serial import RAVEnSerialDevice
 from iso4217 import Currency
@@ -344,6 +346,13 @@ class PortLockRegistry:
             lock.release()
 
 
+# HA serial lifecycles run on one event loop. Weak loop keys prevent closed test
+# loops from retaining locks/aliases or sharing asyncio primitives across loops.
+_DEFAULT_REGISTRIES: WeakKeyDictionary[asyncio.AbstractEventLoop, PortLockRegistry] = (
+    WeakKeyDictionary()
+)
+
+
 class RavenClient:
     """Own one bounded, exclusive Rainforest serial lifecycle."""
 
@@ -355,12 +364,20 @@ class RavenClient:
         **_: Any,
     ) -> None:
         self.path = path
-        self.registry = registry or PortLockRegistry()
+        if registry is None:
+            loop = asyncio.get_running_loop()
+            registry = _DEFAULT_REGISTRIES.setdefault(loop, PortLockRegistry())
+        self.registry = registry
         self.device_info: Any = None
         self._device: Any = None
         self._command_lock = asyncio.Lock()
         self._lease_context: Any = None
         self._lease_owner: _PortLockLease | None = None
+        self.timeout_count = 0
+        self.reconnect_count = 0
+        self.last_success: datetime | None = None
+        self.last_error_stage: FailureStage | None = None
+        self.last_error_reason: FailureReason | None = None
 
     @staticmethod
     def _error(
@@ -482,9 +499,12 @@ class RavenClient:
         """Construct and open a device with safe POSIX exclusivity fallback."""
 
         exclusive = os.name == "posix"
-        kwargs = {"exclusive": True} if exclusive else {}
         try:
-            device = RAVEnSerialDevice(self.path, **kwargs)
+            device = (
+                RAVEnSerialDevice(self.path, exclusive=True)
+                if exclusive
+                else RAVEnSerialDevice(self.path)
+            )
         except Exception as err:
             if not (exclusive and self._exclusive_keyword_unsupported(err)):
                 raise self._translate_error(FailureStage.OPEN, err) from err
@@ -669,6 +689,7 @@ class RavenClient:
                 owner=self._lease_owner,
             )
             self.device_info = info
+            self.reconnect_count += 1
         except BaseException as err:
             cleanup_target = device or self._device
             if cleanup_target is not None:
@@ -703,7 +724,7 @@ class RavenClient:
     def _parse_number(value: object) -> float | None:
         """Parse one finite protocol number without inventing a value."""
 
-        if value is None or isinstance(value, bool):
+        if not isinstance(value, (str, int, float)) or isinstance(value, bool):
             return None
         try:
             parsed = float(value)
@@ -780,6 +801,10 @@ class RavenClient:
             demand = self._parse_number(getattr(demand_response, "demand", None))
             if demand is None:
                 raise self._error(FailureStage.POLL, FailureReason.MALFORMED)
+            # aioraven applies protocol scaling and returns kilowatts.
+            demand *= 1000
+            if not math.isfinite(demand):
+                raise self._error(FailureStage.POLL, FailureReason.MALFORMED)
 
             price_response = await self._async_optional_poll(
                 lambda meter_mac=meter_mac: device.get_current_price(
@@ -824,7 +849,7 @@ class RavenClient:
             if (
                 isinstance(raw_signal, int)
                 and not isinstance(raw_signal, bool)
-                and 0 <= raw_signal <= 255
+                and 0 <= raw_signal <= 100
             ):
                 signal_strength = raw_signal
                 present_fields.add(snapshot_field_key("signal_strength"))
@@ -851,7 +876,9 @@ class RavenClient:
                     ):
                         if needs_open:
                             await self._async_connect()
-                        return await self._async_collect_cycle(meter_macs)
+                        snapshot = await self._async_collect_cycle(meter_macs)
+                        self.last_success = datetime.now(UTC)
+                        return snapshot
                 except asyncio.CancelledError as err:
                     cleanup_error = await self._async_close_persistent(
                         graceful=False,
@@ -862,6 +889,17 @@ class RavenClient:
                     raise
                 except BaseException as err:
                     last_error = self._translate_error(FailureStage.POLL, err)
+                    self.last_error_stage = last_error.stage
+                    self.last_error_reason = last_error.reason
+                    if last_error.reason is FailureReason.TIMEOUT:
+                        self.timeout_count += 1
+                    _LOGGER.debug(
+                        "Rainforest refresh attempt failed "
+                        "(stage=%s, reason=%s, attempt=%s)",
+                        last_error.stage.value,
+                        last_error.reason.value,
+                        attempt + 1,
+                    )
                     cleanup_error = await self._async_close_persistent(
                         graceful=False,
                         release_lease=False,

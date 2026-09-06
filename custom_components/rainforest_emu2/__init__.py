@@ -6,6 +6,7 @@ import asyncio
 import logging
 import os
 import re
+from dataclasses import replace
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EVENT_HOMEASSISTANT_STOP
@@ -190,6 +191,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         reported_id = _normalized_device_id(validation.device_mac)
         if reported_id is None or reported_id != _normalized_device_id(entry.unique_id):
             raise ConfigEntryError("Rainforest configuration requires reconfigure")
+        available_meters = {meter.mac: meter for meter in validation.meters}
+        if any(mac not in available_meters for mac in meter_macs):
+            raise ConfigEntryError("Rainforest configuration requires reconfigure")
+        validation = replace(
+            validation, meters=tuple(available_meters[mac] for mac in meter_macs)
+        )
 
         coordinator = RainforestCoordinator(
             hass, client, meter_macs, config_entry=entry

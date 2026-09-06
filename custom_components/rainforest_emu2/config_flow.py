@@ -110,6 +110,14 @@ def _candidate_from_port(port: object, index: int) -> PortCandidate | None:
         if isinstance(manufacturer, str) and manufacturer
         else "Rainforest serial device"
     )
+    serial_number = _safe_text(getattr(port, "serial_number", None))
+    location = _safe_text(getattr(port, "location", None))
+    context = [path]
+    if location:
+        context.append(f"location {location}")
+    if serial_number:
+        context.append(f"serial {serial_number}")
+    label = f"{label} ({'; '.join(context)})"
     return PortCandidate(
         token=f"port-{index}-{path_hash}",
         path=path,
@@ -485,6 +493,18 @@ class RainforestEmu2ConfigFlow(ConfigFlow, domain=DOMAIN):
         """Retain valid meter defaults without persisting unvalidated data."""
 
         assert self._validation is not None
+        if self._reconfigure_entry is None:
+            candidate = self._selected_port
+            assert candidate is not None
+            await self.async_set_unique_id(format_mac(self._validation.device_mac))
+            self._abort_if_unique_id_configured(
+                updates={
+                    CONF_DEVICE: candidate.path,
+                    CONF_USB_SERIAL: candidate.serial_number,
+                    CONF_USB_VID: candidate.vid,
+                    CONF_USB_PID: candidate.pid,
+                }
+            )
         if not self._validation.meters:
             if step_id == "import_confirm":
                 return self._show_import_confirm_form({"base": "no_paired_meters"})
@@ -620,23 +640,28 @@ class RainforestEmu2ConfigFlow(ConfigFlow, domain=DOMAIN):
     async def _async_wait_for_cleanup(self, operation: Any) -> BaseException | None:
         """Finish a bounded cleanup task before allowing cancellation to escape."""
 
-        task = asyncio.create_task(operation)
+        async def _cleanup_result() -> BaseException | None:
+            try:
+                await operation
+            except BaseException as err:
+                return err
+            return None
+
+        task = asyncio.create_task(_cleanup_result())
         cancellation_received = False
         while True:
             try:
-                await asyncio.shield(task)
+                result = await asyncio.shield(task)
             except asyncio.CancelledError:
-                if task.done() and task.cancelled():
+                if task.done():
                     raise
                 cancellation_received = True
                 continue
-            except BaseException as err:
-                if cancellation_received:
-                    raise asyncio.CancelledError from None
-                return err
             if cancellation_received:
                 raise asyncio.CancelledError
-            return None
+            if isinstance(result, asyncio.CancelledError):
+                raise result
+            return result
 
     async def _async_shutdown_temporary_client(
         self, client: _ReconfigureClient
@@ -678,6 +703,13 @@ class RainforestEmu2ConfigFlow(ConfigFlow, domain=DOMAIN):
                 reconfigured = True
                 await self.async_set_unique_id(format_mac(result.device_mac))
                 self._abort_if_unique_id_mismatch()
+                if not temporary_client:
+                    restore_error = await self._async_wait_for_cleanup(
+                        client.async_restore_path(original_path)
+                    )
+                    if restore_error is not None:
+                        raise restore_error
+                    reconfigured = False
                 self._validation = result
             except BaseException as err:
                 if reconfigured and client is not None:

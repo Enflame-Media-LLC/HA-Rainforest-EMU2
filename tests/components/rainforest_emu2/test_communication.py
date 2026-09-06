@@ -86,6 +86,62 @@ async def test_canonical_symlinks_share_lock(monkeypatch: pytest.MonkeyPatch) ->
     )
 
 
+async def test_default_clients_contend_before_open(
+    fast_lifecycle_timeouts, monkeypatch
+):
+    """Separate production clients must not independently open one gateway."""
+    first = RavenClient("/dev/ttyACM0")
+    second = RavenClient("/dev/ttyACM0")
+    fake = FakeRavenDevice()
+    _successful_fake(fake)
+    monkeypatch.setattr(communication, "RAVEnSerialDevice", FakeRavenFactory(fake))
+    async with first.registry.acquire(first.path):
+        with pytest.raises(RainforestCommunicationError) as raised:
+            await second.async_validate()
+        assert raised.value.reason == FailureReason.BUSY
+        assert fake.calls == []
+
+
+async def test_collector_units_reach_entities(fast_lifecycle_timeouts, monkeypatch):
+    """Dependency demand is kW and link strength is percent, not W/dB."""
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+
+    from custom_components.rainforest_emu2.coordinator import RainforestRuntimeData
+    from custom_components.rainforest_emu2.sensor import async_setup_entry
+
+    fake = PollingRavenDevice()
+    _prepare_polling_connection(fake)
+    _add_polling_cycle(fake, demand="2.5", signal=80)
+    monkeypatch.setattr(communication, "RAVEnSerialDevice", FakeRavenFactory(fake))
+    client = RavenClient("/dev/ttyACM0")
+    try:
+        snapshot = await client.async_refresh((METER_MAC,))
+        coordinator = Mock(data=snapshot, last_update_success=True)
+        coordinator.config_entry = SimpleNamespace(unique_id=DEVICE_MAC.hex())
+        validation = ValidationResult(
+            client.path,
+            DEVICE_MAC.hex(),
+            "Rainforest",
+            "EMU-2",
+            "1.2.3",
+            (MeterRecord(METER_MAC, METER_MAC.hex(), "Main", "electric"),),
+        )
+        entry = SimpleNamespace(
+            runtime_data=RainforestRuntimeData(client, coordinator, validation)
+        )
+        entities = []
+        await async_setup_entry(None, entry, entities.extend)
+        values = {entity.entity_description.key: entity for entity in entities}
+        assert values["demand"].native_value == 2500.0
+        assert values["demand"].native_unit_of_measurement == "W"
+        assert values["signal_strength"].native_value == 80
+        assert values["signal_strength"].native_unit_of_measurement == "%"
+        assert values["signal_strength"].device_class is None
+    finally:
+        await client.async_shutdown()
+
+
 def test_by_id_path_is_redacted() -> None:
     assert safe_path_details("/dev/serial/by-id/usb-Rainforest_SECRET-if00") == {
         "strategy": "by_id",
@@ -749,7 +805,7 @@ async def test_refresh_retries_whole_cycle_and_discards_partial_values(
 
     assert first.calls[-1] == "abort"
     assert second.calls[:3] == ["open", "meter_list", "device_info"]
-    assert snapshot.meters[METER_MAC.hex()].demand == 2.5
+    assert snapshot.meters[METER_MAC.hex()].demand == 2500
     assert snapshot.meters[METER_MAC.hex()].delivered == 12.0
     assert snapshot.meters[METER_MAC.hex()].delivered != 99.0
     assert snapshot.meters[METER_MAC.hex()].price == 0.15
@@ -847,7 +903,7 @@ async def test_refresh_records_exact_field_presence_and_requires_price_currency(
             "device:signal_strength",
         }
     )
-    assert snapshot.meters[meter_key] == MeterSnapshot(2.5, 12.0, None, None, None)
+    assert snapshot.meters[meter_key] == MeterSnapshot(2500, 12.0, None, None, None)
     await client.async_shutdown()
 
 
@@ -899,8 +955,8 @@ async def test_concurrent_refreshes_never_overlap_protocol_commands(
         client.async_refresh((METER_MAC,)), client.async_refresh((METER_MAC,))
     )
 
-    assert first.meters[METER_MAC.hex()].demand == 2.5
-    assert second.meters[METER_MAC.hex()].demand == 3.5
+    assert first.meters[METER_MAC.hex()].demand == 2500
+    assert second.meters[METER_MAC.hex()].demand == 3500
     assert fake.max_active_commands == 1
     assert fake.calls.count("open") == 1
     await client.async_shutdown()
@@ -954,7 +1010,7 @@ async def test_set_path_closes_old_connection_before_next_refresh(
 
     assert first.calls[-1] == "close"
     assert factory.calls[-1][0] == "/dev/ttyUSB0"
-    assert snapshot.meters[METER_MAC.hex()].demand == 2.5
+    assert snapshot.meters[METER_MAC.hex()].demand == 2500
     await client.async_shutdown()
 
 
@@ -1111,7 +1167,7 @@ async def test_cancellation_during_close_discards_transport_before_reuse(
 
     snapshot = await client.async_refresh((METER_MAC,))
 
-    assert snapshot.meters[METER_MAC.hex()].demand == 3.5
+    assert snapshot.meters[METER_MAC.hex()].demand == 3500
     assert factory.calls[-1][0] == "/dev/ttyACM0"
     await client.async_shutdown()
 
@@ -1145,7 +1201,7 @@ async def test_refresh_waits_for_inflight_validation_transport(
     await validating_task
     snapshot = await refresh_task
 
-    assert snapshot.meters[METER_MAC.hex()].demand == 2.5
+    assert snapshot.meters[METER_MAC.hex()].demand == 2500
     await client.async_shutdown()
 
 

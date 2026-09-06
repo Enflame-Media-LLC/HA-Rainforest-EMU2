@@ -62,5 +62,14 @@
       "builtin_not_found": "The selected built-in Rainforest RAVEn entry is no longer available.",
       "unique_id_mismatch": "The selected device does not match this Rainforest entry."
     }
+  },
+  "entity": {
+    "sensor": {
+      "power_demand": {"name": "Power demand"},
+      "energy_delivered": {"name": "Energy delivered"},
+      "energy_received": {"name": "Energy received"},
+      "energy_price": {"name": "Energy price"},
+      "signal_strength": {"name": "Signal strength"}
+    }
   }
 }
