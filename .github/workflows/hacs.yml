@@ -1,0 +1,17 @@
+name: HACS
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  hacs:
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hacs/action@main
+        with:
+          category: integration
+          # Repository metadata is maintained in GitHub settings and cannot be
+          # changed by this branch; validate the integration contents here.
+          ignore: description license topics

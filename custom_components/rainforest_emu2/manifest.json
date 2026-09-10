@@ -1,0 +1,27 @@
+{
+  "domain": "rainforest_emu2",
+  "name": "Rainforest EMU-2 and RAVEn Enhanced",
+  "codeowners": ["@ENFM-RyanJ"],
+  "config_flow": true,
+  "dependencies": ["usb"],
+  "documentation": "https://github.com/Enflame-Media-LLC/HA-Rainforest-EMU2",
+  "integration_type": "hub",
+  "iot_class": "local_polling",
+  "issue_tracker": "https://github.com/Enflame-Media-LLC/HA-Rainforest-EMU2/issues",
+  "requirements": ["aioraven==0.7.1"],
+  "usb": [
+    {
+      "description": "*emu-2*",
+      "manufacturer": "*rainforest*",
+      "pid": "0003",
+      "vid": "04B4"
+    },
+    {
+      "description": "*raven*",
+      "manufacturer": "*rainforest*",
+      "pid": "8A28",
+      "vid": "0403"
+    }
+  ],
+  "version": "0.1.0"
+}
