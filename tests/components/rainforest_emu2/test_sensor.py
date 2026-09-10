@@ -29,7 +29,7 @@ def _runtime(*, present: frozenset[str], success: bool = True):
                 currency="USD",
             )
         },
-        signal_strength=-71,
+        signal_strength=71,
         present_fields=present,
     )
     coordinator = Mock()
@@ -96,8 +96,8 @@ async def test_sensor_descriptions_values_devices_and_unique_ids() -> None:
     assert price.unique_id == f"{METER_MAC}_price"
 
     signal = by_key["signal_strength"]
-    assert signal.native_value == -71
-    assert signal.native_unit_of_measurement == "dB"
+    assert signal.native_value == 71
+    assert signal.native_unit_of_measurement == "%"
     assert signal.state_class == "measurement"
     assert signal.unique_id == f"{DEVICE_MAC}_signal_strength"
     assert signal.device_info["identifiers"] == {("rainforest_emu2", DEVICE_MAC)}

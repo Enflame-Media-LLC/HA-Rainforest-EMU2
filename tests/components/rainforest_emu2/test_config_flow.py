@@ -997,7 +997,9 @@ async def test_reconfigure_loaded_entry_uses_existing_client_and_updates_same_en
 
     result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
     assert result["step_id"] == "meters"
-    assert client.paths == ["/dev/ttyACM0"]
+    # Validate the candidate, then restore the loaded runtime while the user
+    # reviews meter selections so an abandoned flow cannot change live state.
+    assert client.paths == ["/dev/ttyACM0", "/dev/ttyACM9"]
 
     result = await hass.config_entries.flow.async_configure(
         result["flow_id"], {CONF_METERS: [METER_MAC]}

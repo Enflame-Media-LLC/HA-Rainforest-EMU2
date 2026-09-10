@@ -707,7 +707,7 @@ assert states["sensor.main_meter_power_demand"].attributes["unit_of_measurement"
 assert states["sensor.main_meter_energy_delivered"].attributes["unit_of_measurement"] == "kWh"
 assert states["sensor.main_meter_energy_received"].attributes["unit_of_measurement"] == "kWh"
 assert states["sensor.main_meter_energy_price"].attributes["device_class"] == "monetary"
-assert states["sensor.rainforest_signal_strength"].attributes["unit_of_measurement"] == "dB"
+assert states["sensor.rainforest_signal_strength"].attributes["unit_of_measurement"] == "%"
 ```
 
 Verify unique IDs use full unlogged hardware/meter MAC plus a fixed field suffix, names use validated nickname/generic suffix, all devices belong only to the custom config entry, partial missing fields mark only their entity unavailable, and restored/stale values are not reported as available.
@@ -731,7 +731,7 @@ def available(self) -> bool:
 
 The device-level signal entity passes `None` as the meter MAC so its availability key is `device:signal_strength`.
 
-Demand uses `SensorDeviceClass.POWER`, `UnitOfPower.WATT`, and `SensorStateClass.MEASUREMENT`. Delivered/received use `SensorDeviceClass.ENERGY`, `UnitOfEnergy.KILO_WATT_HOUR`, and `SensorStateClass.TOTAL_INCREASING`. Price uses the device currency when present and signal uses dB with measurement state class. Preserve the built-in integration's value semantics where they are valid.
+Demand uses `SensorDeviceClass.POWER`, `UnitOfPower.WATT`, and `SensorStateClass.MEASUREMENT`. Delivered/received use `SensorDeviceClass.ENERGY`, `UnitOfEnergy.KILO_WATT_HOUR`, and `SensorStateClass.TOTAL_INCREASING`. Price uses the device currency when present and signal uses a percentage with measurement state class. Preserve the built-in integration's value semantics where they are valid.
 
 - [ ] **Step 4: Run entity tests**
 

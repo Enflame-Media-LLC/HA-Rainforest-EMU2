@@ -87,7 +87,9 @@ async def test_diagnostics_redact_private_identifiers() -> None:
         "device:signal_strength",
         "meter:0:demand",
     ]
-    assert payload["meters"] == [{"index": 0, "name": "Main meter", "type": "electric"}]
+    # Meter nicknames are user-provided and may contain account or household
+    # identifiers, so diagnostics expose only an indexed, allowlisted type.
+    assert payload["meters"] == [{"index": 0, "type": "electric"}]
 
 
 @pytest.mark.asyncio
