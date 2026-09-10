@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).parents[3]
@@ -35,6 +36,12 @@ def test_distribution_files() -> None:
     for relative in ("README.md", "CHANGELOG.md", "LICENSE", "brand/icon.png"):
         assert (ROOT / relative).is_file()
     assert (ROOT / "brand/icon.png").read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
+
+
+def test_editable_install_does_not_register_namespace_finder() -> None:
+    """Editable test installs must not add a fake custom_components path."""
+    pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text())
+    assert pyproject["tool"]["setuptools"]["packages"] == []
 
 
 def test_single_hacs_integration() -> None:
