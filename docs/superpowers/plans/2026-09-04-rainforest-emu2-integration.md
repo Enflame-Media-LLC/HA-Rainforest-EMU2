@@ -6,7 +6,7 @@
 
 **Architecture:** A distinct `rainforest_emu2` integration wraps upstream `aioraven==0.7.1` behind one communication boundary. Config flow owns discovery and validation, the coordinator owns persistent polling and full-cycle recovery, and entity/diagnostic layers consume immutable results without touching the serial transport.
 
-**Tech Stack:** Python 3.14.2+, Home Assistant 2026.3.0+, `aioraven==0.7.1`, PySerial/`serial_asyncio_fast`, pytest, `pytest-homeassistant-custom-component`, Ruff, mypy, Hassfest, HACS Action, GitHub Actions.
+**Tech Stack:** Python 3.14.2+, Home Assistant 2026.3.1+, `aioraven==0.7.1`, PySerial/`serial_asyncio_fast`, pytest, `pytest-homeassistant-custom-component`, Ruff, mypy, Hassfest, HACS Action, GitHub Actions.
 
 **Spec:** `docs/superpowers/specs/2026-09-04-rainforest-emu2-integration-design.md`
 
@@ -14,7 +14,7 @@
 
 - Domain is exactly `rainforest_emu2`; never shadow or replace `rainforest_raven`.
 - Support EMU-2 `04B4:0003` and legacy RAVEn `0403:8A28` only in normal discovery.
-- Minimum Home Assistant version is `2026.3.0`.
+- Minimum Home Assistant version is `2026.3.1`.
 - Runtime dependency remains upstream `aioraven==0.7.1`; do not fork or vendor it.
 - Never call `RAVEnSerialDevice` outside `communication.py`.
 - Never call `aioraven.synchronize()`; synchronize through the single successful `get_meter_list()` result.
@@ -99,7 +99,7 @@ def test_hacs_contract() -> None:
     hacs = json.loads((ROOT / "hacs.json").read_text())
     assert hacs == {
         "name": "Rainforest EMU-2 and RAVEn Enhanced",
-        "homeassistant": "2026.3.0",
+        "homeassistant": "2026.3.1",
     }
 ```
 
@@ -853,7 +853,7 @@ Create a square PNG icon at least 256×256 with transparent background and ensur
 
 - [ ] **Step 5: Add CI workflows**
 
-`test.yml` runs pytest on Python 3.14 with a matrix containing Home Assistant `2026.3.0` and latest stable, installing dependencies with pip's resolver. `lint.yml` runs `ruff format --check`, `ruff check`, and mypy. `hacs.yml` uses `hacs/action@main`; `hassfest.yml` uses `home-assistant/actions/hassfest@master`.
+`test.yml` runs pytest on Python 3.14 with a matrix containing Home Assistant `2026.3.1` and latest stable, installing dependencies with pip's resolver. `lint.yml` runs `ruff format --check`, `ruff check`, and mypy. `hacs.yml` uses `hacs/action@main`; `hassfest.yml` uses `home-assistant/actions/hassfest@master`.
 
 `release.yml` runs only on `v*` tags, reads `manifest.json`, exits unless tag `v${manifest.version}` matches, reruns tests/validation, and creates a GitHub Release using the repository source archive. It does not create or configure `zip_release`.
 
@@ -906,7 +906,7 @@ Run Hassfest in its documented container/action-compatible mode and run HACS Act
 
 - [ ] **Step 3: Verify install layout in a clean Home Assistant config directory**
 
-Copy only `custom_components/rainforest_emu2` into a temporary clean config, start Home Assistant 2026.3.0, and assert logs contain neither import/setup errors nor an override warning for `rainforest_raven`. Repeat with current stable Home Assistant.
+Copy only `custom_components/rainforest_emu2` into a temporary clean config, start Home Assistant 2026.3.1, and assert logs contain neither import/setup errors nor an override warning for `rainforest_raven`. Repeat with current stable Home Assistant.
 
 - [ ] **Step 4: Recheck privacy and timeout invariants**
 

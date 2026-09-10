@@ -4,7 +4,7 @@
 **Date:** 2026-09-04
 **Repository:** https://github.com/Enflame-Media-LLC/HA-Rainforest-EMU2
 **Integration domain:** `rainforest_emu2`
-**Minimum Home Assistant version:** 2026.3.0
+**Minimum Home Assistant version:** 2026.3.1
 
 ## Purpose
 
@@ -14,7 +14,7 @@ Build a HACS-distributable Home Assistant custom integration for Rainforest Auto
 
 - The integration uses the distinct `rainforest_emu2` domain and does not override Home Assistant's built-in integration.
 - It supports EMU-2 USB VID/PID `04B4:0003` and legacy RAVEn USB VID/PID `0403:8A28`.
-- It supports Home Assistant 2026.3.0 and newer and is tested at both the version floor and the current supported release.
+- It supports Home Assistant 2026.3.1 and newer and is tested at both the version floor and the current supported release.
 - HACS is the installation and update mechanism. The repository is not a Home Assistant App repository because Apps are Supervisor-managed containers, while this integration must run inside Home Assistant and use its config-entry and entity APIs.
 - The integration uses upstream `aioraven==0.7.1` without maintaining a fork.
 - A local communication layer isolates Home Assistant code from `aioraven` lifecycle, parsing, and timeout behavior.
@@ -261,7 +261,7 @@ The root `hacs.json` uses only supported keys:
 ```json
 {
   "name": "Rainforest EMU-2 and RAVEn Enhanced",
-  "homeassistant": "2026.3.0"
+  "homeassistant": "2026.3.1"
 }
 ```
 
@@ -308,12 +308,12 @@ Communication and coordinator coverage includes:
 - Reload and shutdown remain bounded and release locks.
 - Device registry and all sensor states remain correct on the minimum and current Home Assistant versions.
 
-Packaging checks include HACS Action validation, Hassfest, Ruff format/lint, type checking, tests at Home Assistant 2026.3.0, tests at the current supported release, manifest/tag version consistency, and verification that exactly one integration exists under `custom_components`.
+Packaging checks include HACS Action validation, Hassfest, Ruff format/lint, type checking, tests at Home Assistant 2026.3.1, tests at the current supported release, manifest/tag version consistency, and verification that exactly one integration exists under `custom_components`.
 
 ## Acceptance criteria
 
 - The repository can be added to HACS as a custom Integration repository and installs to `custom_components/rainforest_emu2`.
-- Home Assistant 2026.3.0 or newer loads it without overriding `rainforest_raven`.
+- Home Assistant 2026.3.1 or newer loads it without overriding `rainforest_raven`.
 - Both specified USB products are discoverable and manually selectable.
 - Discovery always requires user confirmation before the port is opened.
 - Manual setup remains possible when USB metadata is missing.

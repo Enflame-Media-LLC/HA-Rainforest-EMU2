@@ -11,7 +11,7 @@ jobs:
       fail-fast: false
       matrix:
         python: ["3.14"]
-        home_assistant: ["2026.3.0", "stable"]
+        home_assistant: ["2026.3.1", "stable"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -22,9 +22,11 @@ jobs:
           python -m pip install --upgrade pip
           if [ "${{ matrix.home_assistant }}" = "stable" ]; then
             HA_SPEC=homeassistant
+            TEST_HELPER_SPEC=pytest-homeassistant-custom-component
           else
             HA_SPEC="homeassistant==${{ matrix.home_assistant }}"
+            TEST_HELPER_SPEC=pytest-homeassistant-custom-component==0.13.317
           fi
-          python -m pip install "$HA_SPEC" -e ".[test]"
+          python -m pip install "$HA_SPEC" "$TEST_HELPER_SPEC" -e ".[test]"
       - name: Run tests
         run: python -m pytest -q

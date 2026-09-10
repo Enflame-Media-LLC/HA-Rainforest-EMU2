@@ -12,7 +12,7 @@ from typing import Any, Protocol, cast
 import serial.tools.list_ports
 import voluptuous as vol
 from homeassistant.components import usb
-from homeassistant.config_entries import ConfigEntry, ConfigFlow
+from homeassistant.config_entries import ConfigEntry, ConfigFlow, ConfigFlowResult
 from homeassistant.const import CONF_DEVICE, CONF_MAC
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.device_registry import format_mac
@@ -234,7 +234,7 @@ class RainforestEmu2ConfigFlow(ConfigFlow, domain=DOMAIN):
         *,
         error: str | None = None,
         no_devices: bool = False,
-    ) -> dict[str, Any]:
+    ) -> ConfigFlowResult:
         options = {token: candidate.label for token, candidate in self._ports.items()}
         actions = [ACTION_SELECT, ACTION_RESCAN, ACTION_ADVANCED]
         if self._builtin_entries():
@@ -261,7 +261,7 @@ class RainforestEmu2ConfigFlow(ConfigFlow, domain=DOMAIN):
 
     async def async_step_user(
         self, user_input: Mapping[str, Any] | None = None
-    ) -> dict[str, Any]:
+    ) -> ConfigFlowResult:
         """Show scanned ports and offer a safe advanced-path option."""
 
         if user_input is not None:
@@ -282,7 +282,7 @@ class RainforestEmu2ConfigFlow(ConfigFlow, domain=DOMAIN):
 
     async def async_step_advanced(
         self, user_input: Mapping[str, Any] | None = None
-    ) -> dict[str, Any]:
+    ) -> ConfigFlowResult:
         """Accept a local serial path only after explicit user submission."""
 
         errors: dict[str, str] = {}
@@ -312,7 +312,7 @@ class RainforestEmu2ConfigFlow(ConfigFlow, domain=DOMAIN):
 
     async def async_step_import_builtin(
         self, user_input: Mapping[str, Any] | None = None
-    ) -> dict[str, Any]:
+    ) -> ConfigFlowResult:
         """Offer migration defaults only from a built-in entry no longer enabled."""
 
         entries = {entry.entry_id: entry for entry in self._builtin_entries()}
@@ -378,7 +378,7 @@ class RainforestEmu2ConfigFlow(ConfigFlow, domain=DOMAIN):
 
     def _show_import_confirm_form(
         self, errors: dict[str, str] | None = None
-    ) -> dict[str, Any]:
+    ) -> ConfigFlowResult:
         """Show the editable imported path while preserving validation errors."""
 
         candidate = self._selected_port
@@ -393,7 +393,7 @@ class RainforestEmu2ConfigFlow(ConfigFlow, domain=DOMAIN):
 
     async def async_step_import_confirm(
         self, user_input: Mapping[str, Any] | None = None
-    ) -> dict[str, Any]:
+    ) -> ConfigFlowResult:
         """Allow an imported path to be corrected before serial validation."""
 
         candidate = self._selected_port
@@ -420,7 +420,7 @@ class RainforestEmu2ConfigFlow(ConfigFlow, domain=DOMAIN):
                 return await self._async_confirm_validation("import_confirm")
         return self._show_import_confirm_form(errors or None)
 
-    async def async_step_usb(self, discovery_info: UsbServiceInfo) -> dict[str, Any]:
+    async def async_step_usb(self, discovery_info: UsbServiceInfo) -> ConfigFlowResult:
         """Stage a USB discovery; validation starts only from confirmation."""
 
         self._usb_info = discovery_info
@@ -458,7 +458,7 @@ class RainforestEmu2ConfigFlow(ConfigFlow, domain=DOMAIN):
             and self._matching_usb_serial == other_flow._matching_usb_serial
         )
 
-    async def _async_select_port(self, candidate: PortCandidate) -> dict[str, Any]:
+    async def _async_select_port(self, candidate: PortCandidate) -> ConfigFlowResult:
         """Deduplicate a selected candidate before any serial validation occurs."""
 
         if self._candidate_matches_existing_entry(candidate):
@@ -489,7 +489,7 @@ class RainforestEmu2ConfigFlow(ConfigFlow, domain=DOMAIN):
             return err
         return None
 
-    async def _async_finish_validation(self, step_id: str) -> dict[str, Any]:
+    async def _async_finish_validation(self, step_id: str) -> ConfigFlowResult:
         """Retain valid meter defaults without persisting unvalidated data."""
 
         assert self._validation is not None
@@ -522,7 +522,7 @@ class RainforestEmu2ConfigFlow(ConfigFlow, domain=DOMAIN):
             )
         return await self.async_step_meters()
 
-    async def _async_confirm_validation(self, step_id: str) -> dict[str, Any]:
+    async def _async_confirm_validation(self, step_id: str) -> ConfigFlowResult:
         """Run normal validation after a flow-specific explicit confirmation."""
 
         error = await self._async_validate_selected()
@@ -536,7 +536,7 @@ class RainforestEmu2ConfigFlow(ConfigFlow, domain=DOMAIN):
 
     async def async_step_confirm(
         self, user_input: Mapping[str, Any] | None = None
-    ) -> dict[str, Any]:
+    ) -> ConfigFlowResult:
         """Validate only after the user expressly confirms the selected port."""
 
         if user_input is None:
@@ -545,7 +545,7 @@ class RainforestEmu2ConfigFlow(ConfigFlow, domain=DOMAIN):
 
     async def async_step_reconfigure(
         self, user_input: Mapping[str, Any] | None = None
-    ) -> dict[str, Any]:
+    ) -> ConfigFlowResult:
         """Stage a current or replacement path before touching the runtime client."""
 
         entry = self._get_reconfigure_entry()
@@ -683,7 +683,7 @@ class RainforestEmu2ConfigFlow(ConfigFlow, domain=DOMAIN):
 
     async def async_step_reconfigure_confirm(
         self, user_input: Mapping[str, Any] | None = None
-    ) -> dict[str, Any]:
+    ) -> ConfigFlowResult:
         """Validate transactionally, reject another device, and preserve this entry."""
 
         if user_input is None:
@@ -730,7 +730,7 @@ class RainforestEmu2ConfigFlow(ConfigFlow, domain=DOMAIN):
 
     async def async_step_meters(
         self, user_input: Mapping[str, Any] | None = None
-    ) -> dict[str, Any]:
+    ) -> ConfigFlowResult:
         """Select at least one validated electric meter and create the entry."""
 
         assert self._validation is not None

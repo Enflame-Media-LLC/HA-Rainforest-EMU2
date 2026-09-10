@@ -26,7 +26,7 @@ def test_hacs_contract() -> None:
     hacs = json.loads((ROOT / "hacs.json").read_text())
     assert hacs == {
         "name": "Rainforest EMU-2 and RAVEn Enhanced",
-        "homeassistant": "2026.3.0",
+        "homeassistant": "2026.3.1",
     }
 
 
