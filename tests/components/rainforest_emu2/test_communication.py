@@ -908,9 +908,16 @@ async def test_refresh_records_exact_field_presence_and_requires_price_currency(
 
 
 def test_cycle_budget_scales_with_command_count_and_open_work() -> None:
-    assert communication.cycle_budget(1, needs_open=True) == 30.25
-    assert communication.cycle_budget(2, needs_open=True) == 39.25
-    assert communication.cycle_budget(2, needs_open=False) == 24.0
+    assert communication.cycle_budget(1, needs_open=True) == 49.25
+    assert communication.cycle_budget(2, needs_open=True) == 64.25
+    assert communication.cycle_budget(2, needs_open=False) == 38.0
+
+
+def test_protocol_timeouts_cover_emu_response_window() -> None:
+    """EMU-2 responses can take four seconds, including during setup."""
+
+    assert communication.METER_LIST_TIMEOUT >= 5.0
+    assert communication.QUERY_TIMEOUT >= 5.0
 
 
 async def test_refresh_outer_watchdog_bounds_each_attempt(

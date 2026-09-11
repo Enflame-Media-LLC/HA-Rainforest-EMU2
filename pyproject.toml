@@ -1,6 +1,6 @@
 [project]
 name = "ha-rainforest-emu2"
-version = "0.1.0"
+version = "0.1.1"
 description = "Home Assistant integration for Rainforest EMU-2 and RAVEn devices"
 requires-python = ">=3.14.2"
 dependencies = ["aioraven==0.7.1"]

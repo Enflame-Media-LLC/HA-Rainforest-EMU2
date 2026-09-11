@@ -63,8 +63,13 @@ device. Serial-less or ambiguous devices require manual selection.
 - **No compatible devices found:** confirm USB passthrough, permissions, and
   that the gateway is connected, then rescan.
 - **Device is busy:** stop another serial client or integration and retry.
-- **Open or response timeout:** check the cable, USB power, VM passthrough, and
-  host load. Home Assistant retries transient failures automatically.
+- **Open or response timeout:** the EMU-2 serial protocol can take up to four
+  seconds to answer. Check the cable, USB power, VM passthrough, and host load;
+  Home Assistant retries transient failures automatically. If the host log
+  contains `can't set config #1, error -32`, the Linux USB device has not
+  completed enumeration yet, so changing the integration timeout will not
+  help. Use a known-good data cable, a direct USB 2 port, and no hub/KVM, then
+  verify that `/dev/serial/by-id` or `/dev/ttyACM*` exists before retrying.
 - **Configuration requires reconfigure:** the gateway identity or saved meter
   list changed. Open **Reconfigure** and validate the current path.
 - **Some sensors unavailable:** the latest cycle did not include that optional

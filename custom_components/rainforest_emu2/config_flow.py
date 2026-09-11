@@ -25,6 +25,7 @@ from .communication import (
     RainforestCommunicationError,
     RavenClient,
     ValidationResult,
+    safe_path_details,
 )
 from .const import (
     CONF_METERS,
@@ -486,6 +487,15 @@ class RainforestEmu2ConfigFlow(ConfigFlow, domain=DOMAIN):
                 self._selected_port.path
             ).async_validate()
         except RainforestCommunicationError as err:
+            path_details = safe_path_details(self._selected_port.path)
+            _LOGGER.warning(
+                "Rainforest setup validation failed "
+                "(stage=%s, reason=%s, retryable=%s, path_strategy=%s)",
+                err.stage.value,
+                err.reason.value,
+                err.retryable,
+                path_details["strategy"],
+            )
             return err
         return None
 
