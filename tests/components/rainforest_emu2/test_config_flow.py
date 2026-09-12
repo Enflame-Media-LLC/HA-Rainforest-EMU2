@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -647,6 +648,47 @@ async def test_retryable_validation_errors_preserve_selection_until_success(
     result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
     assert result["type"] is FlowResultType.FORM
     assert result["step_id"] == "meters"
+
+
+async def test_validation_failure_is_logged_without_serial_identifiers(
+    hass, monkeypatch, caplog
+) -> None:
+    """Setup failures are diagnosable while keeping paths and IDs private."""
+    from custom_components.rainforest_emu2 import config_flow
+
+    flow = config_flow.RainforestEmu2ConfigFlow()
+    flow._selected_port = config_flow.PortCandidate(
+        token="test",
+        path="/dev/serial/by-id/usb-Rainforest-SECRET",
+        label="Rainforest",
+        vid=0x04B4,
+        pid=0x0003,
+        serial_number="USB-SECRET",
+        manufacturer="Rainforest",
+        description="EMU-2",
+        location="SECRET-LOCATION",
+    )
+    failure = RainforestCommunicationError(
+        FailureStage.SYNC, FailureReason.TIMEOUT, retryable=True
+    )
+    validate = AsyncMock(side_effect=failure)
+    monkeypatch.setattr(
+        config_flow,
+        "RavenClient",
+        lambda path: type("Client", (), {"async_validate": validate})(),
+    )
+
+    with caplog.at_level(
+        logging.WARNING, logger="custom_components.rainforest_emu2.config_flow"
+    ):
+        error = await flow._async_validate_selected()
+
+    assert error is failure
+    assert "Rainforest setup validation failed" in caplog.text
+    assert "stage=sync" in caplog.text
+    assert "reason=timeout" in caplog.text
+    assert "by_id" in caplog.text
+    assert "SECRET" not in caplog.text
 
 
 async def test_meter_selection_creates_private_entry_data(hass, monkeypatch) -> None:

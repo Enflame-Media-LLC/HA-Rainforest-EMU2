@@ -13,7 +13,7 @@ COMPONENT = ROOT / "custom_components" / "rainforest_emu2"
 def test_manifest_contract() -> None:
     manifest = json.loads((COMPONENT / "manifest.json").read_text())
     assert manifest["domain"] == "rainforest_emu2"
-    assert manifest["version"] == "0.1.0"
+    assert manifest["version"] == "0.1.1"
     assert manifest["requirements"] == ["aioraven==0.7.1"]
     assert manifest["dependencies"] == ["usb"]
     assert manifest["codeowners"] == ["@ENFM-RyanJ"]
