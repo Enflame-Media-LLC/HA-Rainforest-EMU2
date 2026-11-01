@@ -20,7 +20,7 @@ test = [
   "pytest>=8.0",
   "pytest-homeassistant-custom-component",
   "aiousbwatcher==1.1.2",
-  "serialx==1.10.0",
+  "serialx==1.15.1",
   "voluptuous-serialize>=2.7.0",
 ]
 dev = [
@@ -28,7 +28,7 @@ dev = [
   "pytest>=8.0",
   "ruff>=0.9",
   "aiousbwatcher==1.1.2",
-  "serialx==1.10.0",
+  "serialx==1.15.1",
   "types-pyserial",
   "voluptuous-serialize>=2.7.0",
 ]
